@@ -86,7 +86,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   String filtreTypeActuel = 'Tous';
   StreamSubscription<Position>? _positionStream;
 
-  // Controllers pour la création
   final TextEditingController _nomController = TextEditingController();
   final TextEditingController _avisController = TextEditingController();
   final TextEditingController _nouveauCommentController =
@@ -212,7 +211,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     }
   }
 
-  // --- INTERFACE : FICHE DÉTAILLÉE ---
   void _afficherFiche(LieuInteret lieu) {
     _nouveauCommentController.clear();
     _imageBase64Temp = null;
@@ -260,6 +258,30 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   "${lieu.type} • ${lieu.noteMoyenne.toStringAsFixed(1)} ⭐",
                   style: const TextStyle(fontSize: 16, color: Colors.grey),
                 ),
+                const SizedBox(height: 15),
+                // --- BOUTON Y ALLER ---
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      final url =
+                          'https://www.google.com/maps/search/?api=1&query=${lieu.coordonnees.latitude},${lieu.coordonnees.longitude}';
+                      html.window.open(url, '_blank');
+                    },
+                    icon: const Icon(Icons.directions, color: Colors.white),
+                    label: const Text(
+                      "Y ALLER (GPS)",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
                 const Divider(height: 30),
                 Container(
                   padding: const EdgeInsets.all(15),
@@ -272,7 +294,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                       TextField(
                         controller: _nouveauCommentController,
                         decoration: const InputDecoration(
-                          hintText: "Ajouter un avis ou un conseil...",
+                          hintText: "Ajouter un avis...",
                         ),
                       ),
                       Row(
@@ -369,7 +391,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     );
   }
 
-  // --- CRÉATION AVEC NOTE ET COMMENTAIRE ---
   void _ouvrirCreation(LatLng pos) {
     _imageBase64Temp = null;
     _noteCreation = 4.0;
@@ -397,15 +418,10 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                       .toList(),
                   onChanged: (v) => setS(() => _typeSelectionne = v!),
                 ),
-                const SizedBox(height: 10),
                 TextField(
                   controller: _avisController,
-                  decoration: const InputDecoration(
-                    labelText: "Votre avis / commentaire",
-                    hintText: "C'est comment ?",
-                  ),
+                  decoration: const InputDecoration(labelText: "Votre avis"),
                 ),
-                const SizedBox(height: 10),
                 Row(
                   children: [
                     const Text("Note : "),
@@ -507,7 +523,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.green,
-        elevation: 0,
         title: Autocomplete<Map<String, dynamic>>(
           displayStringForOption: (o) => o['display_name'],
           optionsBuilder: (t) => _chercherSuggestions(t.text),
@@ -532,12 +547,8 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
             ),
             onPressed: () {
               setState(() => suivrePosition = !suivrePosition);
-              if (suivrePosition) {
-                _mapController.move(
-                  maPosition,
-                  _mapController.camera.zoom,
-                ); // RECENTRAGE FIXÉ
-              }
+              if (suivrePosition)
+                _mapController.move(maPosition, _mapController.camera.zoom);
             },
           ),
         ],
@@ -567,7 +578,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
           ),
           Container(
             padding: const EdgeInsets.all(10),
-            color: Colors.white,
             child: Column(
               children: [
                 Row(
