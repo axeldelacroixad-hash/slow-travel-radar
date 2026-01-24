@@ -45,12 +45,10 @@ class LieuInteret {
     required this.coordonnees,
     required this.commentaires,
   });
-  double get noteMoyenne {
-    if (commentaires.isEmpty) return 0;
-    return commentaires.map((m) => m.note).reduce((a, b) => a + b) /
-        commentaires.length;
-  }
-
+  double get noteMoyenne => commentaires.isEmpty
+      ? 0
+      : commentaires.map((m) => m.note).reduce((a, b) => a + b) /
+            commentaires.length;
   Map<String, dynamic> toJson() => {
     'id': id,
     'nom': nom,
@@ -76,6 +74,8 @@ class SlowTravelApp extends StatefulWidget {
 
 class _SlowTravelAppState extends State<SlowTravelApp> {
   final MapController _mapController = MapController();
+  final TextEditingController _searchController = TextEditingController();
+
   List<LieuInteret> listeLieux = [];
   List<LatLng> traceItineraire = [];
   LatLng maPosition = const LatLng(46.6, 2.2);
@@ -106,6 +106,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   @override
   void dispose() {
     _positionStream?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -259,7 +260,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   style: const TextStyle(fontSize: 16, color: Colors.grey),
                 ),
                 const SizedBox(height: 15),
-                // --- BOUTON Y ALLER ---
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -283,6 +283,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   ),
                 ),
                 const Divider(height: 30),
+                // Section Avis... (Identique au précédent)
                 Container(
                   padding: const EdgeInsets.all(15),
                   decoration: BoxDecoration(
@@ -313,14 +314,11 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                             },
                           ),
                           if (_imageBase64Temp != null)
-                            Container(
-                              margin: const EdgeInsets.only(left: 10),
+                            Image.memory(
+                              base64Decode(_imageBase64Temp!),
                               height: 50,
                               width: 50,
-                              child: Image.memory(
-                                base64Decode(_imageBase64Temp!),
-                                fit: BoxFit.cover,
-                              ),
+                              fit: BoxFit.cover,
                             ),
                           const Spacer(),
                           Slider(
@@ -332,39 +330,34 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                           ),
                         ],
                       ),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            if (_nouveauCommentController.text.isNotEmpty) {
-                              setState(() {
-                                lieu.commentaires.insert(
-                                  0,
-                                  Avis(
-                                    _nouveauCommentController.text,
-                                    _noteCreation,
-                                    imageBase64: _imageBase64Temp,
-                                  ),
-                                );
-                              });
-                              _sauvegarderLieux();
-                              setS(() {
-                                _nouveauCommentController.clear();
-                                _imageBase64Temp = null;
-                              });
-                            }
-                          },
-                          child: const Text("PUBLIER L'AVIS"),
-                        ),
+                      ElevatedButton(
+                        onPressed: () {
+                          if (_nouveauCommentController.text.isNotEmpty) {
+                            setState(
+                              () => lieu.commentaires.insert(
+                                0,
+                                Avis(
+                                  _nouveauCommentController.text,
+                                  _noteCreation,
+                                  imageBase64: _imageBase64Temp,
+                                ),
+                              ),
+                            );
+                            _sauvegarderLieux();
+                            setS(() {
+                              _nouveauCommentController.clear();
+                              _imageBase64Temp = null;
+                            });
+                          }
+                        },
+                        child: const Text("PUBLIER L'AVIS"),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 20),
                 ...lieu.commentaires.map(
                   (a) => Card(
-                    margin: const EdgeInsets.only(bottom: 20),
-                    clipBehavior: Clip.antiAlias,
+                    margin: const EdgeInsets.only(top: 20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -396,7 +389,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     _noteCreation = 4.0;
     _nomController.clear();
     _avisController.clear();
-
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -422,24 +414,16 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   controller: _avisController,
                   decoration: const InputDecoration(labelText: "Votre avis"),
                 ),
-                Row(
-                  children: [
-                    const Text("Note : "),
-                    Expanded(
-                      child: Slider(
-                        value: _noteCreation,
-                        min: 1,
-                        max: 5,
-                        divisions: 4,
-                        onChanged: (v) => setS(() => _noteCreation = v),
-                      ),
-                    ),
-                    Text("${_noteCreation.toInt()}⭐"),
-                  ],
+                Slider(
+                  value: _noteCreation,
+                  min: 1,
+                  max: 5,
+                  divisions: 4,
+                  onChanged: (v) => setS(() => _noteCreation = v),
                 ),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.camera_alt),
-                  label: const Text("Ajouter une photo"),
+                  label: const Text("Photo"),
                   onPressed: () async {
                     final img = await _picker.pickImage(
                       source: ImageSource.gallery,
@@ -452,13 +436,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   },
                 ),
                 if (_imageBase64Temp != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Image.memory(
-                      base64Decode(_imageBase64Temp!),
-                      height: 80,
-                    ),
-                  ),
+                  Image.memory(base64Decode(_imageBase64Temp!), height: 80),
               ],
             ),
           ),
@@ -523,21 +501,30 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.green,
+        // --- CHANGEMENT ICI : Autocomplete avec notre contrôleur externe ---
         title: Autocomplete<Map<String, dynamic>>(
           displayStringForOption: (o) => o['display_name'],
           optionsBuilder: (t) => _chercherSuggestions(t.text),
           onSelected: (o) =>
               _tracerRoute(double.parse(o['lat']), double.parse(o['lon'])),
-          fieldViewBuilder: (ctx, ctrl, focus, onF) => TextField(
-            controller: ctrl,
-            focusNode: focus,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              hintText: "Destination ?",
-              border: InputBorder.none,
-              hintStyle: TextStyle(color: Colors.white70),
-            ),
-          ),
+          fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+            // Synchronisation : si notre contrôleur est vide, on vide celui de l'autocomplete
+            if (_searchController.text.isEmpty && controller.text.isNotEmpty) {
+              controller.text = "";
+            }
+            return TextField(
+              controller: controller,
+              focusNode: focusNode,
+              onChanged: (val) => _searchController.text =
+                  val, // On met à jour notre contrôleur
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: "Destination ?",
+                border: InputBorder.none,
+                hintStyle: TextStyle(color: Colors.white70),
+              ),
+            );
+          },
         ),
         actions: [
           IconButton(
@@ -605,13 +592,21 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                 ),
                 if (modeTrajetActif)
                   TextButton(
-                    onPressed: () => setState(() {
-                      modeTrajetActif = false;
-                      traceItineraire = [];
-                    }),
+                    onPressed: () {
+                      setState(() {
+                        modeTrajetActif = false;
+                        traceItineraire = [];
+                        suivrePosition = true;
+                        // --- SOLUTION : On vide notre contrôleur ---
+                        _searchController.clear();
+                      });
+                    },
                     child: const Text(
                       "RETOUR MODE RADAR",
-                      style: TextStyle(color: Colors.red),
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
               ],
