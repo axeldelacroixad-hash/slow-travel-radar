@@ -79,6 +79,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   List<LieuInteret> listeLieux = [];
   List<LatLng> traceItineraire = [];
   LatLng maPosition = const LatLng(46.6, 2.2);
+  double monCap = 0.0;
   bool gpsInitialise = false;
   double valeurDetour = 15.0;
   bool modeTrajetActif = false;
@@ -119,21 +120,51 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   }
 
   void _ecouterPosition() {
-    Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
-    ).listen((Position p) {
-      if (!mounted) return;
-      setState(() {
-        maPosition = LatLng(p.latitude, p.longitude);
-        gpsInitialise = true;
-        if (suivrePosition && !modeTrajetActif) {
-          _mapController.move(maPosition, _calculerZoom(valeurDetour));
-        }
-      });
-    });
+    _positionStream =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 5,
+          ),
+        ).listen((Position p) {
+          if (!mounted) return;
+          setState(() {
+            maPosition = LatLng(p.latitude, p.longitude);
+            if (p.heading >= 0) monCap = p.heading;
+            gpsInitialise = true;
+            if (suivrePosition && !modeTrajetActif) {
+              _mapController.move(maPosition, _calculerZoom(valeurDetour));
+            }
+          });
+        });
+  }
+
+  // RECHERCHE LOCALISÉE
+  Future<List<Map<String, dynamic>>> _chercherSuggestions(String query) async {
+    if (query.length < 3) return [];
+
+    // Zone de recherche large autour de la position actuelle (~200km)
+    double delta = 2.0;
+    double viewboxLeft = maPosition.longitude - delta;
+    double viewboxRight = maPosition.longitude + delta;
+    double viewboxTop = maPosition.latitude + delta;
+    double viewboxBottom = maPosition.latitude - delta;
+
+    final url =
+        "https://nominatim.openstreetmap.org/search?"
+        "q=$query"
+        "&format=json"
+        "&limit=10"
+        "&viewbox=$viewboxLeft,$viewboxTop,$viewboxRight,$viewboxBottom"
+        "&addressdetails=1"
+        "&accept-language=fr";
+
+    try {
+      final res = await http.get(Uri.parse(url));
+      return List<Map<String, dynamic>>.from(json.decode(res.body));
+    } catch (e) {
+      return [];
+    }
   }
 
   Future<void> _tracerRoute(double lat, double lon) async {
@@ -283,7 +314,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   ),
                 ),
                 const Divider(height: 30),
-                // Section Avis... (Identique au précédent)
+                // Section Avis
                 Container(
                   padding: const EdgeInsets.all(15),
                   decoration: BoxDecoration(
@@ -479,14 +510,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     );
   }
 
-  Future<List<Map<String, dynamic>>> _chercherSuggestions(String query) async {
-    if (query.length < 3) return [];
-    final url =
-        "https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=5";
-    final res = await http.get(Uri.parse(url));
-    return List<Map<String, dynamic>>.from(json.decode(res.body));
-  }
-
   @override
   Widget build(BuildContext context) {
     List<LieuInteret> visibles = listeLieux.where((l) {
@@ -501,25 +524,28 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.green,
-        // --- CHANGEMENT ICI : Autocomplete avec notre contrôleur externe ---
         title: Autocomplete<Map<String, dynamic>>(
-          displayStringForOption: (o) => o['display_name'],
+          displayStringForOption: (o) {
+            final addr = o['address'];
+            final city =
+                addr?['city'] ?? addr?['town'] ?? addr?['village'] ?? '';
+            final county = addr?['county'] ?? '';
+            return "${o['display_name'].split(',')[0]} ($city $county)";
+          },
           optionsBuilder: (t) => _chercherSuggestions(t.text),
           onSelected: (o) =>
               _tracerRoute(double.parse(o['lat']), double.parse(o['lon'])),
           fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-            // Synchronisation : si notre contrôleur est vide, on vide celui de l'autocomplete
             if (_searchController.text.isEmpty && controller.text.isNotEmpty) {
               controller.text = "";
             }
             return TextField(
               controller: controller,
               focusNode: focusNode,
-              onChanged: (val) => _searchController.text =
-                  val, // On met à jour notre contrôleur
+              onChanged: (val) => _searchController.text = val,
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
-                hintText: "Destination ?",
+                hintText: "Où allez-vous ?",
                 border: InputBorder.none,
                 hintStyle: TextStyle(color: Colors.white70),
               ),
@@ -597,7 +623,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                         modeTrajetActif = false;
                         traceItineraire = [];
                         suivrePosition = true;
-                        // --- SOLUTION : On vide notre contrôleur ---
                         _searchController.clear();
                       });
                     },
@@ -638,10 +663,15 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   markers: [
                     Marker(
                       point: maPosition,
-                      child: const Icon(
-                        Icons.navigation,
-                        color: Colors.blue,
-                        size: 30,
+                      width: 40,
+                      height: 40,
+                      child: Transform.rotate(
+                        angle: (monCap * (math.pi / 180)),
+                        child: const Icon(
+                          Icons.navigation,
+                          color: Colors.blue,
+                          size: 35,
+                        ),
                       ),
                     ),
                     ...visibles.map(
