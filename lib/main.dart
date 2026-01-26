@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -7,8 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:html' as html;
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -74,11 +73,10 @@ class SlowTravelApp extends StatefulWidget {
 
 class _SlowTravelAppState extends State<SlowTravelApp> {
   final MapController _mapController = MapController();
-  final TextEditingController _searchController = TextEditingController();
 
   List<LieuInteret> listeLieux = [];
   List<LatLng> traceItineraire = [];
-  LatLng maPosition = const LatLng(46.6, 2.2);
+  LatLng maPosition = const LatLng(43.64, 2.34);
   double monCap = 0.0;
   bool gpsInitialise = false;
   double valeurDetour = 15.0;
@@ -107,7 +105,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   @override
   void dispose() {
     _positionStream?.cancel();
-    _searchController.dispose();
     super.dispose();
   }
 
@@ -139,26 +136,11 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
         });
   }
 
-  // RECHERCHE LOCALISÉE
   Future<List<Map<String, dynamic>>> _chercherSuggestions(String query) async {
     if (query.length < 3) return [];
-
-    // Zone de recherche large autour de la position actuelle (~200km)
     double delta = 2.0;
-    double viewboxLeft = maPosition.longitude - delta;
-    double viewboxRight = maPosition.longitude + delta;
-    double viewboxTop = maPosition.latitude + delta;
-    double viewboxBottom = maPosition.latitude - delta;
-
     final url =
-        "https://nominatim.openstreetmap.org/search?"
-        "q=$query"
-        "&format=json"
-        "&limit=10"
-        "&viewbox=$viewboxLeft,$viewboxTop,$viewboxRight,$viewboxBottom"
-        "&addressdetails=1"
-        "&accept-language=fr";
-
+        "https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=10&viewbox=${maPosition.longitude - delta},${maPosition.latitude + delta},${maPosition.longitude + delta},${maPosition.latitude - delta}&addressdetails=1&accept-language=fr";
     try {
       final res = await http.get(Uri.parse(url));
       return List<Map<String, dynamic>>.from(json.decode(res.body));
@@ -190,13 +172,15 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     }
   }
 
-  void _sauvegarderLieux() {
+  Future<void> _sauvegarderLieux() async {
+    final prefs = await SharedPreferences.getInstance();
     final data = json.encode(listeLieux.map((l) => l.toJson()).toList());
-    html.window.localStorage['slow_travel_master'] = data;
+    await prefs.setString('slow_travel_data', data);
   }
 
-  void _chargerLieuxSauvegardes() {
-    final data = html.window.localStorage['slow_travel_master'];
+  Future<void> _chargerLieuxSauvegardes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('slow_travel_data');
     if (data != null) {
       final List decoded = json.decode(data);
       setState(() {
@@ -238,6 +222,18 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
         return const Icon(Icons.park, color: Colors.green, size: 30);
       case 'Monument':
         return const Icon(Icons.castle, color: Colors.orange, size: 30);
+      case 'Archéo':
+        return const Icon(
+          Icons.account_balance,
+          color: Colors.blueGrey,
+          size: 30,
+        );
+      case 'Histoire':
+        return const Icon(
+          Icons.auto_stories,
+          color: Colors.redAccent,
+          size: 30,
+        );
       default:
         return const Icon(Icons.wallpaper, color: Colors.blue, size: 30);
     }
@@ -291,30 +287,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   style: const TextStyle(fontSize: 16, color: Colors.grey),
                 ),
                 const SizedBox(height: 15),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      final url =
-                          'https://www.google.com/maps/search/?api=1&query=${lieu.coordonnees.latitude},${lieu.coordonnees.longitude}';
-                      html.window.open(url, '_blank');
-                    },
-                    icon: const Icon(Icons.directions, color: Colors.white),
-                    label: const Text(
-                      "Y ALLER (GPS)",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
                 const Divider(height: 30),
-                // Section Avis
                 Container(
                   padding: const EdgeInsets.all(15),
                   decoration: BoxDecoration(
@@ -436,9 +409,20 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                 DropdownButton<String>(
                   value: _typeSelectionne,
                   isExpanded: true,
-                  items: ['Vue', 'Monument', 'Nature', 'Bivouac', 'Musée']
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                      .toList(),
+                  items:
+                      [
+                            'Vue',
+                            'Monument',
+                            'Nature',
+                            'Bivouac',
+                            'Musée',
+                            'Archéo',
+                            'Histoire',
+                          ]
+                          .map(
+                            (t) => DropdownMenuItem(value: t, child: Text(t)),
+                          )
+                          .toList(),
                   onChanged: (v) => setS(() => _typeSelectionne = v!),
                 ),
                 TextField(
@@ -515,9 +499,10 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     List<LieuInteret> visibles = listeLieux.where((l) {
       bool okType = filtreTypeActuel == 'Tous' || l.type == filtreTypeActuel;
       double distMax = valeurDetour * 0.8;
-      if (modeTrajetActif)
+      if (modeTrajetActif) {
         return okType &&
             _distanceTrajet(l.coordonnees, traceItineraire) <= distMax;
+      }
       return okType && _distGps(maPosition, l.coordonnees) <= distMax;
     }).toList();
 
@@ -525,24 +510,40 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
       appBar: AppBar(
         backgroundColor: Colors.green,
         title: Autocomplete<Map<String, dynamic>>(
-          displayStringForOption: (o) {
-            final addr = o['address'];
-            final city =
-                addr?['city'] ?? addr?['town'] ?? addr?['village'] ?? '';
-            final county = addr?['county'] ?? '';
-            return "${o['display_name'].split(',')[0]} ($city $county)";
-          },
+          displayStringForOption: (o) =>
+              o['display_name'].toString().split(',')[0],
           optionsBuilder: (t) => _chercherSuggestions(t.text),
           onSelected: (o) =>
               _tracerRoute(double.parse(o['lat']), double.parse(o['lon'])),
+          optionsViewBuilder: (context, onSelected, options) => Align(
+            alignment: Alignment.topLeft,
+            child: Material(
+              elevation: 4.0,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.8,
+                color: Colors.white,
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  itemBuilder: (ctx, i) {
+                    final o = options.elementAt(i);
+                    return ListTile(
+                      title: Text(
+                        o['display_name'].split(',')[0],
+                        style: const TextStyle(color: Colors.black),
+                      ),
+                      onTap: () => onSelected(o),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
           fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-            if (_searchController.text.isEmpty && controller.text.isNotEmpty) {
-              controller.text = "";
-            }
             return TextField(
               controller: controller,
               focusNode: focusNode,
-              onChanged: (val) => _searchController.text = val,
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
                 hintText: "Où allez-vous ?",
@@ -560,8 +561,9 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
             ),
             onPressed: () {
               setState(() => suivrePosition = !suivrePosition);
-              if (suivrePosition)
+              if (suivrePosition) {
                 _mapController.move(maPosition, _mapController.camera.zoom);
+              }
             },
           ),
         ],
@@ -574,7 +576,16 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children:
-                  ['Tous', 'Vue', 'Monument', 'Nature', 'Bivouac', 'Musée']
+                  [
+                        'Tous',
+                        'Vue',
+                        'Monument',
+                        'Nature',
+                        'Bivouac',
+                        'Musée',
+                        'Archéo',
+                        'Histoire',
+                      ]
                       .map(
                         (t) => Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 5),
@@ -611,8 +622,9 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   onChanged: (v) {
                     setState(() {
                       valeurDetour = v;
-                      if (suivrePosition && !modeTrajetActif)
+                      if (suivrePosition && !modeTrajetActif) {
                         _mapController.move(maPosition, _calculerZoom(v));
+                      }
                     });
                   },
                 ),
@@ -623,7 +635,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                         modeTrajetActif = false;
                         traceItineraire = [];
                         suivrePosition = true;
-                        _searchController.clear();
                       });
                     },
                     child: const Text(
@@ -654,7 +665,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     polylines: [
                       Polyline(
                         points: traceItineraire,
-                        color: Colors.blue.withOpacity(0.6),
+                        color: Colors.blue.withValues(alpha: 0.6),
                         strokeWidth: 6,
                       ),
                     ],
