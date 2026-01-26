@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart'; // Ajouté pour le guidage
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:async';
@@ -85,6 +86,11 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   String filtreTypeActuel = 'Tous';
   StreamSubscription<Position>? _positionStream;
 
+  // --- VARIABLES COMMERCIALISATION ---
+  bool _periodeEssaiDepassee = false;
+  int _joursRestants = 3;
+  bool _estVIP = false;
+
   final TextEditingController _nomController = TextEditingController();
   final TextEditingController _avisController = TextEditingController();
   final TextEditingController _nouveauCommentController =
@@ -100,12 +106,183 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     super.initState();
     _ecouterPosition();
     _chargerLieuxSauvegardes();
+    _verifierPeriodeEssai();
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
     super.dispose();
+  }
+
+  // --- NOUVELLE FONCTION : GUIDAGE GPS ---
+  Future<void> _lancerGuidage(LatLng destination) async {
+    final url =
+        "https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=driving";
+    if (await canLaunchUrl(Uri.parse(url))) {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // --- LOGIQUE COMMERCIALE ---
+  Future<void> _verifierPeriodeEssai() async {
+    final prefs = await SharedPreferences.getInstance();
+    _estVIP = prefs.getBool('is_vip') ?? false;
+    if (_estVIP) {
+      setState(() => _periodeEssaiDepassee = false);
+      return;
+    }
+
+    String? dateInstallStr = prefs.getString('date_installation');
+    DateTime now = DateTime.now();
+
+    if (dateInstallStr == null) {
+      await prefs.setString('date_installation', now.toIso8601String());
+      dateInstallStr = now.toIso8601String();
+    }
+
+    DateTime dateInstallation = DateTime.parse(dateInstallStr);
+    int heuresPassees = now.difference(dateInstallation).inHours;
+
+    setState(() {
+      _joursRestants = ((72 - heuresPassees) / 24).ceil();
+      if (heuresPassees >= 72) {
+        _periodeEssaiDepassee = true;
+      }
+    });
+  }
+
+  Future<void> _devenirVIP() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_vip', true);
+    setState(() {
+      _estVIP = true;
+      _periodeEssaiDepassee = false;
+    });
+  }
+
+  void _verifierCodePromo(String code) {
+    List<String> codesVIP = ['SLOW26', 'CLUB-CC', 'MAGIQUE', 'EVASION'];
+    if (codesVIP.contains(code.toUpperCase().trim())) {
+      _devenirVIP();
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Code valide ! Bienvenue VIP."),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Code invalide."),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _ouvrirFenetreCode() {
+    final TextEditingController codeController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Code Partenaire"),
+        content: TextField(
+          controller: codeController,
+          decoration: const InputDecoration(hintText: "Entrez votre code"),
+          textCapitalization: TextCapitalization.characters,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Annuler"),
+          ),
+          ElevatedButton(
+            onPressed: () => _verifierCodePromo(codeController.text),
+            child: const Text("VALIDER"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGETS COMMERCIAUX ---
+  Widget _buildPaywall() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(30),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.auto_stories, size: 80, color: Colors.green),
+          const SizedBox(height: 20),
+          const Text(
+            "L'aventure continue !",
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 15),
+          const Text(
+            "Votre période d'essai est terminée. Choisissez un pass pour continuer.",
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 16, color: Colors.grey),
+          ),
+          const SizedBox(height: 40),
+          _buildOptionPrix("Pass Vacances (15 jours)", "6 €"),
+          _buildOptionPrix("Abonnement Mensuel", "5 € / mois"),
+          _buildOptionPrix("Passionné (1 an)", "48 € / an", highlight: true),
+          const SizedBox(height: 20),
+          TextButton.icon(
+            icon: const Icon(Icons.card_giftcard, color: Colors.orange),
+            label: const Text(
+              "J'ai un code partenaire",
+              style: TextStyle(color: Colors.orange),
+            ),
+            onPressed: () => _ouvrirFenetreCode(),
+          ),
+          const SizedBox(height: 10),
+          TextButton(
+            onPressed: () => _devenirVIP(),
+            child: const Text("Restaurer mes achats"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOptionPrix(String titre, String prix, {bool highlight = false}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15),
+      width: double.infinity,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: highlight ? Colors.orange : Colors.green,
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+        ),
+        onPressed: () {},
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            Text(
+              titre,
+              style: const TextStyle(fontSize: 16, color: Colors.white),
+            ),
+            Text(
+              prix,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   double _calculerZoom(double minutes) {
@@ -127,7 +304,9 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
           if (!mounted) return;
           setState(() {
             maPosition = LatLng(p.latitude, p.longitude);
-            if (p.heading >= 0) monCap = p.heading;
+            if (p.heading >= 0) {
+              monCap = p.heading;
+            }
             gpsInitialise = true;
             if (suivrePosition && !modeTrajetActif) {
               _mapController.move(maPosition, _calculerZoom(valeurDetour));
@@ -287,6 +466,23 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   style: const TextStyle(fontSize: 16, color: Colors.grey),
                 ),
                 const SizedBox(height: 15),
+                // --- BOUTON GUIDAGE INTÉGRÉ ---
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                  icon: const Icon(Icons.directions),
+                  label: const Text(
+                    "Y ALLER (GPS EXTERNE)",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  onPressed: () => _lancerGuidage(lieu.coordonnees),
+                ),
                 const Divider(height: 30),
                 Container(
                   padding: const EdgeInsets.all(15),
@@ -467,14 +663,14 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     LieuInteret(
                       id: DateTime.now().toString(),
                       nom: _nomController.text.isEmpty
-                          ? "Spot sans nom"
+                          ? "Spot"
                           : _nomController.text,
                       type: _typeSelectionne,
                       coordonnees: pos,
                       commentaires: [
                         Avis(
                           _avisController.text.isEmpty
-                              ? "Lieu découvert"
+                              ? "Découvert"
                               : _avisController.text,
                           _noteCreation,
                           imageBase64: _imageBase64Temp,
@@ -496,6 +692,10 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
 
   @override
   Widget build(BuildContext context) {
+    if (_periodeEssaiDepassee) {
+      return Scaffold(body: _buildPaywall());
+    }
+
     List<LieuInteret> visibles = listeLieux.where((l) {
       bool okType = filtreTypeActuel == 'Tous' || l.type == filtreTypeActuel;
       double distMax = valeurDetour * 0.8;
@@ -540,18 +740,17 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               ),
             ),
           ),
-          fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-            return TextField(
-              controller: controller,
-              focusNode: focusNode,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                hintText: "Où allez-vous ?",
-                border: InputBorder.none,
-                hintStyle: TextStyle(color: Colors.white70),
+          fieldViewBuilder:
+              (context, controller, focusNode, onFieldSubmitted) => TextField(
+                controller: controller,
+                focusNode: focusNode,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: "Où allez-vous ?",
+                  border: InputBorder.none,
+                  hintStyle: TextStyle(color: Colors.white70),
+                ),
               ),
-            );
-          },
         ),
         actions: [
           IconButton(
@@ -570,6 +769,36 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
       ),
       body: Column(
         children: [
+          if (!_estVIP)
+            Container(
+              width: double.infinity,
+              color: Colors.orange[100],
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15),
+              child: Row(
+                children: [
+                  const Icon(Icons.timer, color: Colors.orange, size: 20),
+                  const SizedBox(width: 10),
+                  Text(
+                    "Période d'essai : il vous reste $_joursRestants jour(s)",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.brown,
+                    ),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => _ouvrirFenetreCode(),
+                    child: const Text(
+                      "VOIR OFFRES",
+                      style: TextStyle(
+                        color: Colors.green,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Container(
             height: 50,
             color: Colors.green,
@@ -608,7 +837,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      modeTrajetActif ? "Écart max route" : "Radar (minutes)",
+                      modeTrajetActif ? "Écart route" : "Radar (min)",
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     Text("${valeurDetour.toInt()} min"),
@@ -630,13 +859,11 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                 ),
                 if (modeTrajetActif)
                   TextButton(
-                    onPressed: () {
-                      setState(() {
-                        modeTrajetActif = false;
-                        traceItineraire = [];
-                        suivrePosition = true;
-                      });
-                    },
+                    onPressed: () => setState(() {
+                      modeTrajetActif = false;
+                      traceItineraire = [];
+                      suivrePosition = true;
+                    }),
                     child: const Text(
                       "RETOUR MODE RADAR",
                       style: TextStyle(
@@ -655,6 +882,10 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                 initialCenter: maPosition,
                 initialZoom: 12,
                 onTap: (p, l) => _ouvrirCreation(l),
+                // --- ACTIVATION DE LA ROTATION MANUELLE ---
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all,
+                ),
               ),
               children: [
                 TileLayer(
@@ -665,23 +896,37 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     polylines: [
                       Polyline(
                         points: traceItineraire,
-                        color: Colors.blue.withValues(alpha: 0.6),
+                        color: Colors.blue.withOpacity(0.6),
                         strokeWidth: 6,
                       ),
                     ],
                   ),
                 MarkerLayer(
                   markers: [
+                    // --- MARQUEUR POSITION AVEC BOUSSOLE ROTATIVE ---
                     Marker(
                       point: maPosition,
-                      width: 40,
-                      height: 40,
+                      width: 60,
+                      height: 60,
                       child: Transform.rotate(
                         angle: (monCap * (math.pi / 180)),
-                        child: const Icon(
-                          Icons.navigation,
-                          color: Colors.blue,
-                          size: 35,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.blue.withOpacity(0.1),
+                              ),
+                            ),
+                            const Icon(
+                              Icons.navigation,
+                              color: Colors.blue,
+                              size: 35,
+                            ),
+                          ],
                         ),
                       ),
                     ),
