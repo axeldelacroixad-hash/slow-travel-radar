@@ -778,17 +778,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               ),
         ),
         actions: [
-          // --- AJOUT DU COMPTEUR ICI ---
-          Center(
-            child: Text(
-              "${_joursRestants}j ${_heuresRestantes}h ${_minutesRestantes}m ",
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          // -----------------------------
           IconButton(
             icon: Icon(
               suivrePosition ? Icons.gps_fixed : Icons.gps_not_fixed,
@@ -815,11 +804,8 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                   const Icon(Icons.timer, color: Colors.orange, size: 20),
                   const SizedBox(width: 10),
                   Text(
-                    "Période d'essai : il vous reste $_joursRestants jour(s)",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.brown,
-                    ),
+                    "Essai : ${_joursRestants}j ${_heuresRestantes}h ${_minutesRestantes}m restantes",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const Spacer(),
                   GestureDetector(
