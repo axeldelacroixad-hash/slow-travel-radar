@@ -76,6 +76,9 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   final MapController _mapController = MapController();
 
   List<LieuInteret> listeLieux = [];
+  int _joursRestants = 3;
+  int _heuresRestantes = 0;
+  int _minutesRestantes = 0;
   List<LatLng> traceItineraire = [];
   LatLng maPosition = const LatLng(43.64, 2.34);
   double monCap = 0.0;
@@ -89,7 +92,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
 
   // --- VARIABLES COMMERCIALISATION ---
   bool _periodeEssaiDepassee = false;
-  int _joursRestants = 3;
   bool _estVIP = false;
 
   final TextEditingController _nomController = TextEditingController();
@@ -125,6 +127,45 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     super.dispose();
   }
 
+  Future<void> _verifierPeriodeEssai() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. Vérification VIP
+    _estVIP = prefs.getBool('is_vip') ?? false;
+    if (_estVIP) {
+      setState(() => _periodeEssaiDepassee = false);
+      return;
+    }
+
+    // 2. Gestion de la date d'installation
+    String? dateInstallStr = prefs.getString('slow_travel_install_timestamp');
+    DateTime now = DateTime.now();
+
+    if (dateInstallStr == null) {
+      dateInstallStr = now.toIso8601String();
+      await prefs.setString('slow_travel_install_timestamp', dateInstallStr);
+    }
+
+    DateTime dateInstallation = DateTime.parse(dateInstallStr);
+
+    // 3. Calcul de l'écart (Limite de 3 jours)
+    Duration limite = const Duration(days: 3);
+    Duration ecoule = now.difference(dateInstallation);
+    Duration restant = limite - ecoule;
+
+    // 4. Mise à jour des chiffres de l'interface
+    setState(() {
+      if (restant.isNegative) {
+        _periodeEssaiDepassee = true;
+      } else {
+        _periodeEssaiDepassee = false;
+        _joursRestants = restant.inDays;
+        _heuresRestantes = restant.inHours.remainder(24);
+        _minutesRestantes = restant.inMinutes.remainder(60);
+      }
+    });
+  }
+
   // --- NOUVELLE FONCTION : GUIDAGE GPS ---
   Future<void> _lancerGuidage(LatLng destination) async {
     final url =
@@ -135,32 +176,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   }
 
   // --- LOGIQUE COMMERCIALE ---
-  Future<void> _verifierPeriodeEssai() async {
-    final prefs = await SharedPreferences.getInstance();
-    _estVIP = prefs.getBool('is_vip') ?? false;
-    if (_estVIP) {
-      setState(() => _periodeEssaiDepassee = false);
-      return;
-    }
-
-    String? dateInstallStr = prefs.getString('date_installation');
-    DateTime now = DateTime.now();
-
-    if (dateInstallStr == null) {
-      await prefs.setString('date_installation', now.toIso8601String());
-      dateInstallStr = now.toIso8601String();
-    }
-
-    DateTime dateInstallation = DateTime.parse(dateInstallStr);
-    int heuresPassees = now.difference(dateInstallation).inHours;
-
-    setState(() {
-      _joursRestants = ((72 - heuresPassees) / 24).ceil();
-      if (heuresPassees >= 72) {
-        _periodeEssaiDepassee = true;
-      }
-    });
-  }
 
   Future<void> _devenirVIP() async {
     final prefs = await SharedPreferences.getInstance();
@@ -763,6 +778,17 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               ),
         ),
         actions: [
+          // --- AJOUT DU COMPTEUR ICI ---
+          Center(
+            child: Text(
+              "${_joursRestants}j ${_heuresRestantes}h ${_minutesRestantes}m ",
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          // -----------------------------
           IconButton(
             icon: Icon(
               suivrePosition ? Icons.gps_fixed : Icons.gps_not_fixed,
