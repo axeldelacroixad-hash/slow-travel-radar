@@ -85,6 +85,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   bool suivrePosition = true;
   String filtreTypeActuel = 'Tous';
   StreamSubscription<Position>? _positionStream;
+  Timer? _timerCompteur;
 
   // --- VARIABLES COMMERCIALISATION ---
   bool _periodeEssaiDepassee = false;
@@ -107,11 +108,20 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     _ecouterPosition();
     _chargerLieuxSauvegardes();
     _verifierPeriodeEssai();
+
+    // On lance le chrono une seule fois ici
+    _timerCompteur = Timer.periodic(const Duration(minutes: 1), (timer) {
+      _verifierPeriodeEssai();
+    });
   }
 
   @override
   void dispose() {
+    _timerCompteur?.cancel(); // On arrête le chrono proprement
     _positionStream?.cancel();
+    _nomController.dispose();
+    _avisController.dispose();
+    _nouveauCommentController.dispose();
     super.dispose();
   }
 
@@ -896,7 +906,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     polylines: [
                       Polyline(
                         points: traceItineraire,
-                        color: Colors.blue.withOpacity(0.6),
+                        color: Colors.blue.withValues(alpha: 0.6),
                         strokeWidth: 6,
                       ),
                     ],
@@ -918,7 +928,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                               height: 40,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.blue.withOpacity(0.1),
+                                color: Colors.blue.withValues(alpha: 0.7),
                               ),
                             ),
                             const Icon(
