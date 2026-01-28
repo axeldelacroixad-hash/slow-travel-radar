@@ -340,19 +340,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
         });
   }
 
-  Future<List<Map<String, dynamic>>> _chercherSuggestions(String query) async {
-    if (query.length < 3) return [];
-    double delta = 2.0;
-    final url =
-        "https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=10&viewbox=${maPosition.longitude - delta},${maPosition.latitude + delta},${maPosition.longitude + delta},${maPosition.latitude - delta}&addressdetails=1&accept-language=fr";
-    try {
-      final res = await http.get(Uri.parse(url));
-      return List<Map<String, dynamic>>.from(json.decode(res.body));
-    } catch (e) {
-      return [];
-    }
-  }
-
   Future<void> _tracerRoute(double lat, double lon) async {
     final url =
         "https://router.project-osrm.org/route/v1/driving/${maPosition.longitude},${maPosition.latitude};$lon,$lat?overview=full&geometries=geojson";
@@ -380,6 +367,47 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     final prefs = await SharedPreferences.getInstance();
     final data = json.encode(listeLieux.map((l) => l.toJson()).toList());
     await prefs.setString('slow_travel_data', data);
+  }
+
+  Future<Iterable<Map<String, dynamic>>> _chercherSuggestions(
+    String query,
+  ) async {
+    if (query.length < 3) return const Iterable.empty();
+
+    // Photon est mondial et gère très bien l'autocomplétion (prédiction)
+    final url = Uri.parse(
+      "https://photon.komoot.io/api/?q=${Uri.encodeComponent(query)}&limit=10&lang=fr",
+    );
+
+    try {
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        // utf8.decode est vital ici pour les accents (ex: Bruxelles, Málaga)
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final List features = data['features'];
+
+        return features.map((f) {
+          final p = f['properties'];
+          final coords = f['geometry']['coordinates'];
+
+          // On construit un nom lisible : Nom, Ville, Pays
+          List<String> components = [];
+          if (p['name'] != null) components.add(p['name']);
+          if (p['city'] != null) components.add(p['city']);
+          if (p['country'] != null) components.add(p['country']);
+
+          return {
+            'display_name': components.join(', '),
+            'lat': coords[1].toString(),
+            'lon': coords[0].toString(),
+          };
+        });
+      }
+    } catch (e) {
+      debugPrint("Erreur Monde : $e");
+    }
+    return const Iterable.empty();
   }
 
   Future<void> _chargerLieuxSauvegardes() async {
@@ -580,26 +608,104 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     ],
                   ),
                 ),
-                ...lieu.commentaires.map(
-                  (a) => Card(
-                    margin: const EdgeInsets.only(top: 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (a.imageBase64 != null)
-                          Image.memory(
-                            base64Decode(a.imageBase64!),
-                            width: double.infinity,
-                            height: 200,
-                            fit: BoxFit.cover,
+                Builder(
+                  builder: (context) {
+                    // 1. On crée une liste triée : les avis avec photos en premier (index -1), sans photos au fond (index 1)
+                    final commentairesTries = List.from(lieu.commentaires)
+                      ..sort((a, b) {
+                        if (a.imageBase64 != null && b.imageBase64 == null) {
+                          return -1;
+                        }
+                        if (a.imageBase64 == null && b.imageBase64 != null) {
+                          return 1;
+                        }
+                        return 0;
+                      });
+
+                    return GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2, // Garde les 2 colonnes
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                            childAspectRatio: 0.75,
                           ),
-                        ListTile(
-                          title: Text("⭐" * a.note.toInt()),
-                          subtitle: Text(a.texte),
-                        ),
-                      ],
-                    ),
-                  ),
+                      itemCount:
+                          commentairesTries.length, // Utilise la liste triée
+                      itemBuilder: (context, index) {
+                        final a =
+                            commentairesTries[index]; // On récupère l'avis trié
+                        final bool aUnePhoto = a.imageBase64 != null;
+
+                        return Card(
+                          clipBehavior: Clip.antiAlias,
+                          // Si pas de photo, on met un fond gris très léger pour le différencier
+                          color: aUnePhoto ? Colors.white : Colors.grey[50],
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (aUnePhoto)
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      showDialog(
+                                        context: context,
+                                        builder: (ctx) => Dialog(
+                                          backgroundColor: Colors.black,
+                                          child: InteractiveViewer(
+                                            child: Image.memory(
+                                              base64Decode(a.imageBase64!),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: Image.memory(
+                                      base64Decode(a.imageBase64!),
+                                      width: double.infinity,
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                )
+                              else
+                                // Si pas de photo, on met une petite icône vide pour garder la structure
+                                const Expanded(
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.chat_bubble_outline,
+                                      color: Colors.grey,
+                                      size: 30,
+                                    ),
+                                  ),
+                                ),
+
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "⭐" * a.note.toInt(),
+                                      style: const TextStyle(fontSize: 10),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      a.texte,
+                                      style: const TextStyle(fontSize: 11),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
               ],
             ),
@@ -614,102 +720,218 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     _noteCreation = 4.0;
     _nomController.clear();
     _avisController.clear();
-    showDialog(
+
+    showModalBottomSheet(
       context: context,
+      isScrollControlled: true, // Pour que le clavier ne cache rien
+      backgroundColor: Colors.transparent, // Pour gérer nos propres arrondis
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text("Ajouter ce lieu"),
-          content: SingleChildScrollView(
+        builder: (ctx, setS) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+          ),
+          padding: EdgeInsets.only(
+            top: 20,
+            left: 20,
+            right: 20,
+            bottom:
+                MediaQuery.of(ctx).viewInsets.bottom +
+                20, // Ajuste selon le clavier
+          ),
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Barre de drag en haut pour le look
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  "Nouveau Spot",
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 20),
+
+                // Champ Nom
                 TextField(
                   controller: _nomController,
-                  decoration: const InputDecoration(labelText: "Nom du spot"),
+                  decoration: InputDecoration(
+                    labelText: "Nom du spot",
+                    prefixIcon: const Icon(
+                      Icons.edit_location_alt,
+                      color: Colors.green,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
-                DropdownButton<String>(
-                  value: _typeSelectionne,
-                  isExpanded: true,
-                  items:
-                      [
-                            'Vue',
-                            'Monument',
-                            'Nature',
-                            'Bivouac',
-                            'Musée',
-                            'Archéo',
-                            'Histoire',
-                          ]
-                          .map(
-                            (t) => DropdownMenuItem(value: t, child: Text(t)),
-                          )
-                          .toList(),
-                  onChanged: (v) => setS(() => _typeSelectionne = v!),
+                const SizedBox(height: 15),
+
+                // Type de lieu stylisé
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _typeSelectionne,
+                      isExpanded: true,
+                      items:
+                          [
+                                'Vue',
+                                'Monument',
+                                'Nature',
+                                'Bivouac',
+                                'Musée',
+                                'Archéo',
+                                'Histoire',
+                              ]
+                              .map(
+                                (t) =>
+                                    DropdownMenuItem(value: t, child: Text(t)),
+                              )
+                              .toList(),
+                      onChanged: (v) => setS(() => _typeSelectionne = v!),
+                    ),
+                  ),
                 ),
+                const SizedBox(height: 15),
+
+                // Avis
                 TextField(
                   controller: _avisController,
-                  decoration: const InputDecoration(labelText: "Votre avis"),
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: "Votre avis",
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
-                Slider(
-                  value: _noteCreation,
-                  min: 1,
-                  max: 5,
-                  divisions: 4,
-                  onChanged: (v) => setS(() => _noteCreation = v),
+                const SizedBox(height: 15),
+
+                // Note avec Slider
+                Row(
+                  children: [
+                    const Text(
+                      "Note : ",
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: _noteCreation,
+                        min: 1,
+                        max: 5,
+                        divisions: 4,
+                        activeColor: Colors.green,
+                        label: _noteCreation.toInt().toString(),
+                        onChanged: (v) => setS(() => _noteCreation = v),
+                      ),
+                    ),
+                    Text(
+                      "${_noteCreation.toInt()}/5",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
                 ),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.camera_alt),
-                  label: const Text("Photo"),
-                  onPressed: () async {
-                    final img = await _picker.pickImage(
-                      source: ImageSource.gallery,
-                      maxWidth: 800,
-                    );
-                    if (img != null) {
-                      final b = await img.readAsBytes();
-                      setS(() => _imageBase64Temp = base64Encode(b));
-                    }
-                  },
+
+                // Photo section
+                Row(
+                  children: [
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey[200],
+                        foregroundColor: Colors.black,
+                      ),
+                      icon: const Icon(Icons.camera_alt),
+                      label: const Text("Photo"),
+                      onPressed: () async {
+                        final img = await _picker.pickImage(
+                          source: ImageSource.gallery,
+                          maxWidth: 800,
+                        );
+                        if (img != null) {
+                          final b = await img.readAsBytes();
+                          setS(() => _imageBase64Temp = base64Encode(b));
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 15),
+                    if (_imageBase64Temp != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.memory(
+                          base64Decode(_imageBase64Temp!),
+                          height: 50,
+                          width: 50,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                  ],
                 ),
-                if (_imageBase64Temp != null)
-                  Image.memory(base64Decode(_imageBase64Temp!), height: 80),
+                const SizedBox(height: 25),
+
+                // Bouton Enregistrer
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        listeLieux.add(
+                          LieuInteret(
+                            id: DateTime.now().toString(),
+                            nom: _nomController.text.isEmpty
+                                ? "Spot"
+                                : _nomController.text,
+                            type: _typeSelectionne,
+                            coordonnees: pos,
+                            commentaires: [
+                              Avis(
+                                _avisController.text.isEmpty
+                                    ? "Découvert"
+                                    : _avisController.text,
+                                _noteCreation,
+                                imageBase64: _imageBase64Temp,
+                              ),
+                            ],
+                          ),
+                        );
+                      });
+                      _sauvegarderLieux();
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text(
+                      "ENREGISTRER",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Annuler"),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  listeLieux.add(
-                    LieuInteret(
-                      id: DateTime.now().toString(),
-                      nom: _nomController.text.isEmpty
-                          ? "Spot"
-                          : _nomController.text,
-                      type: _typeSelectionne,
-                      coordonnees: pos,
-                      commentaires: [
-                        Avis(
-                          _avisController.text.isEmpty
-                              ? "Découvert"
-                              : _avisController.text,
-                          _noteCreation,
-                          imageBase64: _imageBase64Temp,
-                        ),
-                      ],
-                    ),
-                  );
-                });
-                _sauvegarderLieux();
-                Navigator.pop(ctx);
-              },
-              child: const Text("ENREGISTRER"),
-            ),
-          ],
         ),
       ),
     );
@@ -740,31 +962,48 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
           optionsBuilder: (t) => _chercherSuggestions(t.text),
           onSelected: (o) =>
               _tracerRoute(double.parse(o['lat']), double.parse(o['lon'])),
-          optionsViewBuilder: (context, onSelected, options) => Align(
-            alignment: Alignment.topLeft,
-            child: Material(
-              elevation: 4.0,
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.8,
-                color: Colors.white,
-                child: ListView.builder(
-                  padding: EdgeInsets.zero,
-                  shrinkWrap: true,
-                  itemCount: options.length,
-                  itemBuilder: (ctx, i) {
-                    final o = options.elementAt(i);
-                    return ListTile(
-                      title: Text(
-                        o['display_name'].split(',')[0],
-                        style: const TextStyle(color: Colors.black),
-                      ),
-                      onTap: () => onSelected(o),
-                    );
-                  },
+          optionsViewBuilder: (context, onSelected, options) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                elevation: 4.0,
+                child: Container(
+                  width: MediaQuery.of(context).size.width * 0.8,
+                  color: Colors.white,
+                  child: ListView.builder(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    itemBuilder: (ctx, i) {
+                      final o = options.elementAt(i);
+
+                      // --- MODIFICATION ICI ---
+                      return ListTile(
+                        title: Text(
+                          o['display_name'].split(
+                            ',',
+                          )[0], // Le nom principal (ex: Toulouse)
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Text(
+                          o['display_name'], // L'adresse complète pour être sûr de son choix
+                          style: const TextStyle(
+                            color: Colors.black54,
+                            fontSize: 10,
+                          ),
+                        ),
+                        onTap: () => onSelected(o),
+                      );
+                      // -------------------------
+                    },
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
           fieldViewBuilder:
               (context, controller, focusNode, onFieldSubmitted) => TextField(
                 controller: controller,
@@ -940,7 +1179,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                               height: 40,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.blue.withValues(alpha: 0.7),
+                                color: Colors.blue.withValues(alpha: 0.3),
                               ),
                             ),
                             const Icon(
