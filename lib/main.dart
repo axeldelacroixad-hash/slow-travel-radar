@@ -10,6 +10,7 @@ import 'dart:math' as math;
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 
+LatLng? destinationActuelle;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
@@ -77,6 +78,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
 
   List<LieuInteret> listeLieux = [];
   int _joursRestants = 3;
+  LatLng? destinationActuelle;
   int _heuresRestantes = 0;
   int _minutesRestantes = 0;
   List<LatLng> traceItineraire = [];
@@ -86,6 +88,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   double valeurDetour = 15.0;
   bool modeTrajetActif = false;
   bool suivrePosition = true;
+  bool _eviterPeages = false;
   String filtreTypeActuel = 'Tous';
   StreamSubscription<Position>? _positionStream;
   Timer? _timerCompteur;
@@ -341,25 +344,58 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   }
 
   Future<void> _tracerRoute(double lat, double lon) async {
-    final url =
-        "https://router.project-osrm.org/route/v1/driving/${maPosition.longitude},${maPosition.latitude};$lon,$lat?overview=full&geometries=geojson";
-    final res = await http.get(Uri.parse(url));
-    final data = json.decode(res.body);
-    if (data['routes'] != null && data['routes'].isNotEmpty) {
-      var coords = data['routes'][0]['geometry']['coordinates'] as List;
-      setState(() {
-        traceItineraire = coords
-            .map((c) => LatLng(c[1].toDouble(), c[0].toDouble()))
-            .toList();
-        modeTrajetActif = true;
-        suivrePosition = false;
-        _mapController.fitCamera(
-          CameraFit.bounds(
-            bounds: LatLngBounds.fromPoints(traceItineraire),
-            padding: const EdgeInsets.all(50),
-          ),
-        );
-      });
+    destinationActuelle = LatLng(lat, lon);
+    // 1. TA CLÉ API OPENROUTE SERVICE (gratuite sur openrouteservice.org)
+    const String apiKey =
+        "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFjYWFjN2RhNWY5YzQ4OGRhOTg3YWIzM2EwYzU1YjBlIiwiaCI6Im11cm11cjY0In0=";
+
+    final url = Uri.parse(
+      "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+    );
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          'Authorization': apiKey,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: jsonEncode({
+          "coordinates": [
+            [maPosition.longitude, maPosition.latitude],
+            [lon, lat],
+          ],
+          // Voici la nouvelle structure correcte :
+          "options": {
+            "avoid_features": _eviterPeages ? ["tollways", "highways"] : [],
+          },
+          "language": "fr",
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        // Avec OpenRouteService, le chemin est dans features[0] -> geometry -> coordinates
+        var coords = data['features'][0]['geometry']['coordinates'] as List;
+
+        setState(() {
+          traceItineraire = coords
+              .map((c) => LatLng(c[1].toDouble(), c[0].toDouble()))
+              .toList();
+
+          modeTrajetActif = true;
+          suivrePosition = false;
+
+          _mapController.fitCamera(
+            CameraFit.bounds(
+              bounds: LatLngBounds.fromPoints(traceItineraire),
+              padding: const EdgeInsets.all(50),
+            ),
+          );
+        });
+      } else {}
+    } catch (e) {
+      ("Erreur lors du calcul du trajet : $e");
     }
   }
 
@@ -960,8 +996,11 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
           displayStringForOption: (o) =>
               o['display_name'].toString().split(',')[0],
           optionsBuilder: (t) => _chercherSuggestions(t.text),
-          onSelected: (o) =>
-              _tracerRoute(double.parse(o['lat']), double.parse(o['lon'])),
+          onSelected: (o) {
+            double latSelection = double.parse(o['lat'].toString());
+            double lonSelection = double.parse(o['lon'].toString());
+            _tracerRoute(latSelection, lonSelection);
+          },
           optionsViewBuilder: (context, onSelected, options) {
             return Align(
               alignment: Alignment.topLeft,
@@ -976,20 +1015,16 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     itemCount: options.length,
                     itemBuilder: (ctx, i) {
                       final o = options.elementAt(i);
-
-                      // --- MODIFICATION ICI ---
                       return ListTile(
                         title: Text(
-                          o['display_name'].split(
-                            ',',
-                          )[0], // Le nom principal (ex: Toulouse)
+                          o['display_name'].split(',')[0],
                           style: const TextStyle(
                             color: Colors.black,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         subtitle: Text(
-                          o['display_name'], // L'adresse complète pour être sûr de son choix
+                          o['display_name'],
                           style: const TextStyle(
                             color: Colors.black54,
                             fontSize: 10,
@@ -997,7 +1032,6 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                         ),
                         onTap: () => onSelected(o),
                       );
-                      // -------------------------
                     },
                   ),
                 ),
@@ -1017,6 +1051,43 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               ),
         ),
         actions: [
+          // --- BLOC SLOW TRAVEL AVEC SWITCH ---
+          Row(
+            children: [
+              const Text(
+                "Slow Travel",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              Transform.scale(
+                scale:
+                    0.8, // On réduit un peu la taille pour que ça rentre bien
+                child: Switch(
+                  value: _eviterPeages,
+                  activeColor: Colors.white,
+                  activeTrackColor: Colors.green[900],
+                  inactiveThumbColor: Colors.grey[300],
+                  inactiveTrackColor: Colors.white24,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _eviterPeages = value;
+                    });
+                    if (destinationActuelle != null) {
+                      _tracerRoute(
+                        destinationActuelle!.latitude,
+                        destinationActuelle!.longitude,
+                      );
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+
+          // --- TON BOUTON GPS ---
           IconButton(
             icon: Icon(
               suivrePosition ? Icons.gps_fixed : Icons.gps_not_fixed,
@@ -1157,7 +1228,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     polylines: [
                       Polyline(
                         points: traceItineraire,
-                        color: Colors.blue.withValues(alpha: 0.6),
+                        color: _eviterPeages ? Colors.green : Colors.orange,
                         strokeWidth: 6,
                       ),
                     ],
