@@ -92,7 +92,10 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   String filtreTypeActuel = 'Tous';
   StreamSubscription<Position>? _positionStream;
   Timer? _timerCompteur;
-
+  double distanceTrajet = 0.0; // Stocke la distance en km
+  double dureeTrajet = 0.0; // Stocke la durée en minutes
+  double vitesseActuelle = 0.0;
+  Color couleurRouteActuelle = Colors.blue;
   // --- VARIABLES COMMERCIALISATION ---
   bool _periodeEssaiDepassee = false;
   bool _estVIP = false;
@@ -332,6 +335,12 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
           if (!mounted) return;
           setState(() {
             maPosition = LatLng(p.latitude, p.longitude);
+
+            // --- AJOUT DE LA VITESSE ---
+            // On vérifie si la vitesse est disponible (parfois négative si signal faible)
+            // On multiplie par 3.6 pour passer de m/s à km/h
+            vitesseActuelle = p.speed > 0 ? p.speed * 3.6 : 0.0;
+
             if (p.heading >= 0) {
               monCap = p.heading;
             }
@@ -383,8 +392,16 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               .map((c) => LatLng(c[1].toDouble(), c[0].toDouble()))
               .toList();
 
+          // --- AJOUT DES INFOS DE TRAJET ---
+          // OpenRouteService donne la distance en mètres et la durée en secondes
+          var summary = data['features'][0]['properties']['summary'];
+          distanceTrajet = summary['distance'] / 1000.0; // Conversion en km
+          dureeTrajet = summary['duration'] / 60.0; // Conversion en minutes
+          // ---------------------------------
+
           modeTrajetActif = true;
           suivrePosition = false;
+          couleurRouteActuelle = _eviterPeages ? Colors.green : Colors.blue;
 
           _mapController.fitCamera(
             CameraFit.bounds(
@@ -1067,7 +1084,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     0.8, // On réduit un peu la taille pour que ça rentre bien
                 child: Switch(
                   value: _eviterPeages,
-                  activeColor: Colors.white,
+                  activeThumbColor: Colors.white,
                   activeTrackColor: Colors.green[900],
                   inactiveThumbColor: Colors.grey[300],
                   inactiveTrackColor: Colors.white24,
@@ -1208,96 +1225,197 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
             ),
           ),
           Expanded(
-            child: FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: maPosition,
-                initialZoom: 12,
-                onTap: (p, l) => _ouvrirCreation(l),
-                // --- ACTIVATION DE LA ROTATION MANUELLE ---
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.all,
-                ),
-              ),
+            child: Stack(
+              // <--- ON AJOUTE LE STACK ICI
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                ),
-                if (modeTrajetActif)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: traceItineraire,
-                        color: _eviterPeages ? Colors.green : Colors.orange,
-                        strokeWidth: 6,
-                      ),
-                    ],
-                  ),
-                MarkerLayer(
-                  markers: [
-                    // --- MARQUEUR POSITION AVEC BOUSSOLE ROTATIVE ---
-                    Marker(
-                      point: maPosition,
-                      width: 60,
-                      height: 60,
-                      child: Transform.rotate(
-                        angle: (monCap * (math.pi / 180)),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.blue.withValues(alpha: 0.3),
-                              ),
-                            ),
-                            const Icon(
-                              Icons.navigation,
-                              color: Colors.blue,
-                              size: 35,
-                            ),
-                          ],
-                        ),
-                      ),
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: maPosition,
+                    initialZoom: 12,
+                    onTap: (p, l) => _ouvrirCreation(l),
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.all,
                     ),
-                    ...visibles.map(
-                      (l) => Marker(
-                        point: l.coordonnees,
-                        width: 45,
-                        height: 45,
-                        child: GestureDetector(
-                          onTap: () => _afficherFiche(l),
-                          child: Column(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(2),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(5),
-                                ),
-                                child: Text(
-                                  "${l.noteMoyenne.toStringAsFixed(1)}⭐",
-                                  style: const TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    ),
+                    if (modeTrajetActif)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: traceItineraire,
+                            // ON UTILISE LA VARIABLE SYNCHRONISÉE :
+                            color: couleurRouteActuelle,
+                            strokeWidth: 6,
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: maPosition,
+                          width: 60,
+                          height: 60,
+                          child: Transform.rotate(
+                            angle: (monCap * (math.pi / 180)),
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.blue.withValues(alpha: 0.3),
                                   ),
                                 ),
+                                const Icon(
+                                  Icons.navigation,
+                                  color: Colors.blue,
+                                  size: 35,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        ...visibles.map(
+                          (l) => Marker(
+                            point: l.coordonnees,
+                            width: 45,
+                            height: 45,
+                            child: GestureDetector(
+                              onTap: () => _afficherFiche(l),
+                              child: Column(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(5),
+                                    ),
+                                    child: Text(
+                                      "${l.noteMoyenne.toStringAsFixed(1)}⭐",
+                                      style: const TextStyle(
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  _getIcon(l.type),
+                                ],
                               ),
-                              _getIcon(l.type),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ), // <--- FIN DU FLUTTERMAP
+                // --- TON BANDEAU D'INFOS (POSITIONED) ---
+                if (modeTrajetActif)
+                  // --- UN SEUL BANDEAU D'INFOS PROPRE ---
+                  Positioned(
+                    bottom: 20,
+                    left: 10,
+                    right: 10,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        // BLOC GAUCHE : VITESSE (Toujours visible)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 15,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(color: Colors.white24, width: 1),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                vitesseActuelle.toInt().toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 28,
+                                ),
+                              ),
+                              const Text(
+                                "km/h",
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                      ),
+
+                        // BLOC DROIT : DISTANCE / TEMPS (Seulement si trajet actif)
+                        if (modeTrajetActif)
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.85),
+                              borderRadius: BorderRadius.circular(15),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 10,
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _formaterTemps(dureeTrajet),
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                Text(
+                                  _formaterDistance(distanceTrajet),
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
-                  ],
-                ),
-              ],
-            ),
+                  ),
+              ], // <--- FERMETURE DU CHILDREN DU STACK
+            ), // <--- FERMETURE DU STACK
           ),
-        ],
+        ], // <--- FERMETURE DE L'EXPANDED        ],
       ),
     );
+  }
+
+  String _formaterTemps(double minutes) {
+    int h = minutes ~/ 60;
+    int m = (minutes % 60).toInt();
+    if (h > 0) return "${h}h ${m.toString().padLeft(2, '0')}min";
+    return "${m}min";
+  }
+
+  String _formaterDistance(double km) {
+    if (km >= 1) return "${km.toStringAsFixed(1)} km";
+    return "${(km * 1000).toInt()} m";
   }
 }
