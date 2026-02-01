@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map/flutter_map.dart'; // Tu sembles utiliser flutter_map (OpenStreetMap)
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart'; // Ajouté pour le guidage
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+// Supprime l'import google_maps_flutter si tu utilises FlutterMap (les points verts)
 LatLng? destinationActuelle;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -99,12 +101,14 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   // --- VARIABLES COMMERCIALISATION ---
   bool _periodeEssaiDepassee = false;
   bool _estVIP = false;
+  List<LieuInteret> _visibles = [];
+  LatLng? _dernierePositionCalcul;
 
   final TextEditingController _nomController = TextEditingController();
   final TextEditingController _avisController = TextEditingController();
   final TextEditingController _nouveauCommentController =
       TextEditingController();
-
+  TextEditingController? _autocompleteController;
   String _typeSelectionne = 'Vue';
   double _noteCreation = 4.0;
   String? _imageBase64Temp;
@@ -113,6 +117,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   @override
   void initState() {
     super.initState();
+    WakelockPlus.enable();
     _ecouterPosition();
     _chargerLieuxSauvegardes();
     _verifierPeriodeEssai();
@@ -130,6 +135,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
     _nomController.dispose();
     _avisController.dispose();
     _nouveauCommentController.dispose();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -345,10 +351,15 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               monCap = p.heading;
             }
             gpsInitialise = true;
-            if (suivrePosition && !modeTrajetActif) {
-              _mapController.move(maPosition, _calculerZoom(valeurDetour));
+            if (suivrePosition || modeTrajetActif) {
+              _mapController.moveAndRotate(
+                maPosition,
+                _calculerZoom(valeurDetour),
+                -monCap, // On utilise le cap pour faire tourner la carte
+              );
             }
           });
+          _filtrerLieuxIntelligemment();
         });
   }
 
@@ -558,10 +569,18 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                     IconButton(
                       icon: const Icon(Icons.delete_forever, color: Colors.red),
                       onPressed: () {
-                        setState(
-                          () => listeLieux.removeWhere((l) => l.id == lieu.id),
-                        );
+                        setState(() {
+                          // 1. On le retire de la liste source
+                          listeLieux.removeWhere((l) => l.id == lieu.id);
+                        });
+
+                        // 2. ICI : On force la mise à jour immédiate de l'affichage
+                        _filtrerLieuxIntelligemment(force: true);
+
+                        // 3. On enregistre le changement sur le téléphone
                         _sauvegarderLieux();
+
+                        // 4. On ferme la petite fiche
                         Navigator.pop(context);
                       },
                     ),
@@ -750,6 +769,45 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                     ),
+
+                                    // --- LE NOUVEAU BOUTON PLUS PROPRE ---
+                                    if (a.texte.contains("http"))
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 8.0,
+                                        ),
+                                        child: ElevatedButton.icon(
+                                          onPressed: () => _ouvrirLien(a.texte),
+                                          icon: const Icon(
+                                            Icons.play_circle_outline,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            "VOIR LE LIEN",
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.blue[50],
+                                            foregroundColor: Colors.blue[800],
+                                            elevation: 0,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 0,
+                                            ),
+                                            minimumSize: const Size(
+                                              0,
+                                              30,
+                                            ), // Pour qu'il reste discret
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -949,27 +1007,33 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                       ),
                     ),
                     onPressed: () {
-                      setState(() {
-                        listeLieux.add(
-                          LieuInteret(
-                            id: DateTime.now().toString(),
-                            nom: _nomController.text.isEmpty
-                                ? "Spot"
-                                : _nomController.text,
-                            type: _typeSelectionne,
-                            coordonnees: pos,
-                            commentaires: [
-                              Avis(
-                                _avisController.text.isEmpty
-                                    ? "Découvert"
-                                    : _avisController.text,
-                                _noteCreation,
-                                imageBase64: _imageBase64Temp,
-                              ),
-                            ],
+                      // 1. On prépare le lieu
+                      final nouveau = LieuInteret(
+                        id: DateTime.now().toString(),
+                        nom: _nomController.text.isEmpty
+                            ? "Spot"
+                            : _nomController.text,
+                        type: _typeSelectionne,
+                        coordonnees: pos,
+                        commentaires: [
+                          Avis(
+                            _avisController.text.isEmpty
+                                ? "Découvert"
+                                : _avisController.text,
+                            _noteCreation,
+                            imageBase64: _imageBase64Temp,
                           ),
-                        );
+                        ],
+                      );
+
+                      // 2. On met à jour et on filtre
+                      setState(() {
+                        listeLieux.add(nouveau);
+                        _filtrerLieuxIntelligemment(
+                          force: true,
+                        ); // On le met DANS le setState
                       });
+
                       _sauvegarderLieux();
                       Navigator.pop(ctx);
                     },
@@ -996,15 +1060,9 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
       return Scaffold(body: _buildPaywall());
     }
 
-    List<LieuInteret> visibles = listeLieux.where((l) {
-      bool okType = filtreTypeActuel == 'Tous' || l.type == filtreTypeActuel;
-      double distMax = valeurDetour * 0.8;
-      if (modeTrajetActif) {
-        return okType &&
-            _distanceTrajet(l.coordonnees, traceItineraire) <= distMax;
-      }
-      return okType && _distGps(maPosition, l.coordonnees) <= distMax;
-    }).toList();
+    // Le calcul de la liste "visibles" a été supprimé d'ici.
+    // L'interface utilise désormais la variable globale "_visibles"
+    // qui est mise à jour par la fonction _filtrerLieuxIntelligemment.
 
     return Scaffold(
       appBar: AppBar(
@@ -1055,17 +1113,26 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
               ),
             );
           },
-          fieldViewBuilder:
-              (context, controller, focusNode, onFieldSubmitted) => TextField(
-                controller: controller,
-                focusNode: focusNode,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  hintText: "Où allez-vous ?",
-                  border: InputBorder.none,
-                  hintStyle: TextStyle(color: Colors.white70),
-                ),
+          fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+            _autocompleteController = controller;
+
+            return TextField(
+              controller: controller,
+              focusNode: focusNode,
+              style: const TextStyle(color: Colors.white),
+              // LE PARAMÈTRE DOIT ÊTRE ICI (après style ou focusNode) :
+              textInputAction: TextInputAction.go,
+              onSubmitted: (value) {
+                onFieldSubmitted();
+              },
+              decoration: const InputDecoration(
+                hintText: "Où allez-vous ?",
+                border: InputBorder.none,
+                hintStyle: TextStyle(color: Colors.white70),
+                // SURTOUT PAS ICI (enlève-le de la décoration s'il y est)
               ),
+            );
+          },
         ),
         actions: [
           // --- BLOC SLOW TRAVEL AVEC SWITCH ---
@@ -1170,8 +1237,16 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                           child: ChoiceChip(
                             label: Text(t),
                             selected: filtreTypeActuel == t,
-                            onSelected: (s) =>
-                                setState(() => filtreTypeActuel = t),
+                            onSelected: (s) {
+                              if (s) {
+                                // On vérifie si le chip vient d'être sélectionné
+                                setState(() {
+                                  filtreTypeActuel = t;
+                                });
+                                // AJOUTE CETTE LIGNE ICI :
+                                _filtrerLieuxIntelligemment(force: true);
+                              }
+                            },
                           ),
                         ),
                       )
@@ -1204,15 +1279,26 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                         _mapController.move(maPosition, _calculerZoom(v));
                       }
                     });
+
+                    // ON L'APPELLE ICI (après le setState)
+                    // On force le calcul car le rayon a changé
+                    _filtrerLieuxIntelligemment(force: true);
                   },
                 ),
                 if (modeTrajetActif)
                   TextButton(
-                    onPressed: () => setState(() {
-                      modeTrajetActif = false;
-                      traceItineraire = [];
-                      suivrePosition = true;
-                    }),
+                    onPressed: () {
+                      // --- ICI ON VIDE LE TEXTE "OÙ ALLEZ-VOUS" ---
+                      _autocompleteController?.clear();
+
+                      setState(() {
+                        modeTrajetActif = false;
+                        traceItineraire = [];
+                        destinationActuelle = null;
+                        suivrePosition = true;
+                      });
+                      _filtrerLieuxIntelligemment(force: true);
+                    },
                     child: const Text(
                       "RETOUR MODE RADAR",
                       style: TextStyle(
@@ -1256,6 +1342,7 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                       ),
                     MarkerLayer(
                       markers: [
+                        // 1. LE CURSEUR (Toujours là)
                         Marker(
                           point: maPosition,
                           width: 60,
@@ -1282,7 +1369,22 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                             ),
                           ),
                         ),
-                        ...visibles.map(
+
+                        // 2. LA DESTINATION (Si elle existe)
+                        if (destinationActuelle != null)
+                          Marker(
+                            point: destinationActuelle!,
+                            width: 60,
+                            height: 60,
+                            child: const Icon(
+                              Icons.flag,
+                              color: Colors.red,
+                              size: 45,
+                            ),
+                          ),
+
+                        // 3. LES POINTS D'INTÉRÊT
+                        ..._visibles.map(
                           (l) => Marker(
                             point: l.coordonnees,
                             width: 45,
@@ -1310,14 +1412,13 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ), // <--- FIN DU FLUTTERMAP
+                        ), // Fin du .map
+                      ], // Fin de la liste markers
+                    ), // Fin du MarkerLayer
+                  ], // Fin de la liste des LAYERS du FlutterMap
+                ), // Fin du widget FlutterMap
                 // --- TON BANDEAU D'INFOS (POSITIONED) ---
                 if (modeTrajetActif)
-                  // --- UN SEUL BANDEAU D'INFOS PROPRE ---
                   Positioned(
                     bottom: 20,
                     left: 10,
@@ -1417,5 +1518,52 @@ class _SlowTravelAppState extends State<SlowTravelApp> {
   String _formaterDistance(double km) {
     if (km >= 1) return "${km.toStringAsFixed(1)} km";
     return "${(km * 1000).toInt()} m";
+  }
+
+  void _filtrerLieuxIntelligemment({bool force = false}) {
+    double distanceDepuisDernier = 0;
+    if (_dernierePositionCalcul != null) {
+      distanceDepuisDernier = _distGps(maPosition, _dernierePositionCalcul!);
+    }
+
+    if (force ||
+        _dernierePositionCalcul == null ||
+        distanceDepuisDernier > 0.25 ||
+        modeTrajetActif) {
+      double distMax = valeurDetour * 0.8;
+      setState(() {
+        _visibles = listeLieux.where((l) {
+          bool okType =
+              filtreTypeActuel == 'Tous' || l.type == filtreTypeActuel;
+          if (!okType) return false;
+          if (modeTrajetActif) {
+            return _distanceTrajet(l.coordonnees, traceItineraire) <= distMax;
+          }
+          return _distGps(maPosition, l.coordonnees) <= distMax;
+        }).toList();
+        _dernierePositionCalcul = maPosition;
+      });
+    }
+  }
+}
+
+Future<void> _ouvrirLien(String texteComplet) async {
+  // 1. On cherche l'index du "http" dans le texte
+  int indexDebut = texteComplet.indexOf("http");
+  if (indexDebut == -1) return; // Pas de lien trouvé
+
+  // 2. On extrait tout ce qui commence par http jusqu'à la fin ou un espace
+  String urlExtraite = texteComplet.substring(indexDebut).split(' ').first;
+
+  // 3. On nettoie les éventuels caractères spéciaux à la fin (points, virgules)
+  urlExtraite = urlExtraite.replaceAll(RegExp(r'[,\.!]$'), '');
+
+  final Uri uri = Uri.parse(urlExtraite.trim());
+
+  try {
+    // LaunchMode.externalApplication est crucial pour ne pas bloquer l'app
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    debugPrint("Erreur d'ouverture : $e");
   }
 }
